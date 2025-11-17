@@ -1,24 +1,61 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
+import { Slot, useRouter, useSegments } from "expo-router";
+import { supabase } from "../supabaseClient";
+import React, { useEffect, useState } from "react";
+import * as SplashScreen from "expo-splash-screen";
+import LoadingScreen from "./LoadingScreen";
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
+SplashScreen.preventAutoHideAsync(); // keep native splash visible
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+export const AuthContext = React.createContext({ session: null });
+export const useAuth = () => React.useContext(AuthContext);
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
+  const [session, setSession] = useState(null);
+  const [appReady, setAppReady] = useState(false);
+
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    async function prepare() {
+      const { data } = await supabase.auth.getSession();
+      setSession(data.session ?? null);
+
+      const { data: authListener } = supabase.auth.onAuthStateChange(
+        (_event, newSession) => setSession(newSession)
+      );
+
+      return () => authListener.subscription.unsubscribe();
+    }
+
+    prepare().then(() => {
+      setAppReady(true); // JS ready
+    });
+  }, []);
+
+  // Navigation logic
+  useEffect(() => {
+    if (!appReady) return;
+
+    const inAuth = segments[0] === "Auth";
+
+    if (!session && !inAuth) {
+      router.replace("/Auth/SigninScreen");
+    } else if (session && inAuth) {
+      router.replace("/(tabs)/today");
+    }
+
+    setTimeout(() => {
+      SplashScreen.hideAsync();
+    }, 200);
+  }, [session, appReady, segments]);
+  if (!appReady) {
+    return <LoadingScreen />;
+  }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <AuthContext.Provider value={{ session }}>
+      <Slot />
+    </AuthContext.Provider>
   );
 }
