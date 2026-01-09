@@ -145,7 +145,6 @@ export default function TodayScreen() {
     await supabase.from("tasks").delete().eq("id", taskId);
     load();
   };
-  console.log("Platform.OS: ", Platform.OS);
 
   return (
     <LinearGradient

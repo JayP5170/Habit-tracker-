@@ -1,41 +1,42 @@
+import { LinearGradient } from "expo-linear-gradient";
+import * as Notifications from "expo-notifications";
 import React from "react";
 import {
-  View,
-  Text,
+  Alert,
   FlatList,
-  TextInput,
-  Pressable,
-  Switch,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
+  SafeAreaView,
   ScrollView,
-  Alert,
+  Switch,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
 import { supabase } from "../../supabaseClient";
-import { useAuth } from "../_layout";
-import * as Notifications from 'expo-notifications';
 import {
   registerForPushNotifications,
   scheduleDailyReminder,
-  cancelAllNotifications,
-  sendTestNotification,
-} from '../../utils/notifications';
+} from "../../utils/notifications";
+import { useAuth } from "../_layout";
 
 type Habit = {
   id: string;
   title: string;
   description?: string;
+  created_at: string;
+  streak: number;
+  completedToday: boolean;
+  lastCompletedAt?: string;
+  notificationScheduled?: boolean;
 };
 
 export default function HabitsScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id;
 
-  const [habits, setHabits] = React.useState<
-  (Habit & { streak: number; completedToday: boolean; created_at: string })[]
-  >([]);
+  const [habits, setHabits] = React.useState<Habit[]>([]);
   const [newTitle, setNewTitle] = React.useState("");
   const [newDescription, setNewDescription] = React.useState("");
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -49,19 +50,20 @@ export default function HabitsScreen() {
   const [reminderMinute, setReminderMinute] = React.useState("00");
   const [showSettings, setShowSettings] = React.useState(false);
 
+  const scheduledNotificationsRef = React.useRef<Map<string, string>>(
+    new Map()
+  );
+
   // Initialize notifications on mount
   React.useEffect(() => {
     initializeNotifications();
-    
-    // Handle notification received while app is foregrounded
-    const subscription = Notifications.addNotificationReceivedListener(notification => {
-      console.log('Notification received:', notification);
-    });
 
-    // Handle notification tapped
-    const responseSubscription = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log('Notification tapped:', response);
-    });
+    const subscription = Notifications.addNotificationReceivedListener(
+      (notification) => {}
+    );
+
+    const responseSubscription =
+      Notifications.addNotificationResponseReceivedListener((response) => {});
 
     return () => {
       subscription.remove();
@@ -72,7 +74,6 @@ export default function HabitsScreen() {
   const initializeNotifications = async () => {
     const hasPermission = await registerForPushNotifications();
     if (hasPermission) {
-      // Load saved notification preferences
       const savedSettings = await loadNotificationSettings();
       if (savedSettings) {
         setNotificationsEnabled(savedSettings.enabled);
@@ -83,39 +84,56 @@ export default function HabitsScreen() {
   };
 
   const loadNotificationSettings = async () => {
-    // You can store these in Supabase or AsyncStorage
-    // For now, returning null - implement your storage solution
     return null;
   };
 
-  const saveNotificationSettings = async (enabled: boolean, hour: string, minute: string) => {
-    // Save to Supabase or AsyncStorage
-    // Example: await AsyncStorage.setItem('notificationSettings', JSON.stringify({enabled, hour, minute}));
+  const saveNotificationSettings = async (
+    enabled: boolean,
+    hour: string,
+    minute: string
+  ) => {
+    // TODO: Save to Supabase or AsyncStorage
   };
 
   const toggleNotifications = async (value: boolean) => {
     setNotificationsEnabled(value);
-    
+
     if (value) {
       const hour = parseInt(reminderHour);
       const minute = parseInt(reminderMinute);
-      await scheduleDailyReminder(hour, minute);
+      const dailyNotificationId = await scheduleDailyReminder(hour, minute);
+
+      // ✅ Store daily reminder ID too
+      scheduledNotificationsRef.current.set(
+        "daily_reminder",
+        dailyNotificationId
+      );
+
       Alert.alert(
         "✅ Notifications Enabled",
         `You'll receive daily reminders at ${reminderHour}:${reminderMinute}`
       );
     } else {
-      await cancelAllNotifications();
-      Alert.alert("🔕 Notifications Disabled", "Daily reminders have been turned off");
+      // ✅ Cancel using stored ID
+      const dailyId = scheduledNotificationsRef.current.get("daily_reminder");
+      if (dailyId) {
+        await Notifications.cancelScheduledNotificationAsync(dailyId);
+        scheduledNotificationsRef.current.delete("daily_reminder");
+      }
+
+      Alert.alert(
+        "🔕 Notifications Disabled",
+        "Daily reminders have been turned off"
+      );
     }
-    
+
     await saveNotificationSettings(value, reminderHour, reminderMinute);
   };
 
   const updateReminderTime = async () => {
     const hour = parseInt(reminderHour);
     const minute = parseInt(reminderMinute);
-    
+
     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
       Alert.alert("Invalid Time", "Please enter a valid time (00:00 - 23:59)");
       return;
@@ -128,50 +146,75 @@ export default function HabitsScreen() {
         `Daily reminder set for ${reminderHour}:${reminderMinute}`
       );
     }
-    
-    await saveNotificationSettings(notificationsEnabled, reminderHour, reminderMinute);
-  };
 
-  const testNotification = async () => {
-    await sendTestNotification();
-    Alert.alert("🔔 Test Sent", "Check your notifications in a few seconds!");
+    await saveNotificationSettings(
+      notificationsEnabled,
+      reminderHour,
+      reminderMinute
+    );
   };
 
   const load = React.useCallback(async () => {
     if (!userId) return;
+
     const today = new Date().toISOString().slice(0, 10);
 
+    // Get habits
     const { data: habitsData } = await supabase
       .from("habits")
       .select("id, title, description, created_at")
       .eq("user_id", userId);
 
+    // Get today's logs
     const { data: logsData } = await supabase
       .from("habit_logs")
-      .select("habit_id, completed")
+      .select("habit_id, completed, day")
       .eq("user_id", userId)
       .eq("day", today);
 
+    // Get last completion time for each habit
+    const { data: lastCompletions } = await supabase
+      .from("habit_logs")
+      .select("habit_id, completed_at")
+      .eq("user_id", userId)
+      .eq("completed", true)
+      .order("completed_at", { ascending: false });
+
     const habitsWithExtras = await Promise.all(
       (habitsData ?? []).map(async (h: any) => {
+        // Get current streak
         const { data: streakData } = await supabase.rpc("current_streak", {
           h: h.id,
           u: userId,
         });
-        console.log('data: ', { data: streakData });
+        
         const todayLog = logsData?.find((l: any) => l.habit_id === h.id);
+        const completedToday = todayLog?.completed ?? false;
+
+        const lastCompletion = lastCompletions?.find(
+          (l: any) => l.habit_id === h.id
+        );
+
         return {
           ...h,
           streak: streakData ?? 0,
-          completedToday: todayLog?.completed ?? false,
+          completedToday,
+          lastCompletedAt: lastCompletion?.completed_at,
         };
       })
     );
+
     setHabits(habitsWithExtras);
   }, [userId]);
 
+  // Load habits on mount and set up refresh interval
   React.useEffect(() => {
     load();
+
+    // Refresh every 5 minutes to update time-sensitive data
+    const interval = setInterval(load, 5 * 60 * 1000);
+
+    return () => clearInterval(interval);
   }, [load]);
 
   const addHabit = async () => {
@@ -185,6 +228,30 @@ export default function HabitsScreen() {
     setNewDescription("");
     load();
   };
+  const scheduleStreakNotificationAtCompletion = async (habit: Habit) => {
+    try {
+      const notificationTime = new Date();
+      notificationTime.setHours(notificationTime.getHours() + 11);
+
+      const notificationId = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: `⚠️ Streak Alert: ${habit.title}`,
+          body: `You have 13 hours left to complete "${habit.title}" and maintain your streak! 🔥`,
+          data: { habitId: habit.id, type: "streak_reminder" },
+        },
+        trigger: notificationTime,
+      });
+
+      // ✅ NOW WE USE IT: Store the notification ID mapped to habit ID
+      scheduledNotificationsRef.current.set(habit.id, notificationId);
+
+      console.log(
+        `Scheduled notification ${notificationId} for habit ${habit.id}`
+      );
+    } catch (error) {
+      console.error("Failed to schedule streak notification:", error);
+    }
+  };
 
   const toggleCompleteToday = async (habitId: string) => {
     const today = new Date().toISOString().slice(0, 10);
@@ -196,14 +263,37 @@ export default function HabitsScreen() {
       .eq("day", today)
       .maybeSingle();
     if (!data) {
+      // First, cancel any existing notifications for this habit
+      await cancelHabitNotifications(habitId);
+
+      // Insert the completion log
       await supabase.from("habit_logs").insert({
         habit_id: habitId,
         user_id: userId,
         day: today,
         completed: true,
+        completed_at: new Date().toISOString(),
       });
+
+      const habit = habits.find((h) => h.id === habitId);
+      if (habit) {
+        await scheduleStreakNotificationAtCompletion(habit);
+      }
     }
+
     load();
+  };
+
+  // Add this helper function
+  const cancelHabitNotifications = async (habitId: string) => {
+    const notificationId = scheduledNotificationsRef.current.get(habitId);
+
+    if (notificationId) {
+      // Cancel using the specific ID (much faster!)
+      await Notifications.cancelScheduledNotificationAsync(notificationId);
+
+      scheduledNotificationsRef.current.delete(habitId);
+    }
   };
 
   const saveEditHabit = async () => {
@@ -225,6 +315,8 @@ export default function HabitsScreen() {
   };
 
   const deleteHabit = async (id: string) => {
+    // Cancel notifications first
+    await cancelHabitNotifications(id);
     await supabase.from("habits").delete().eq("id", id).eq("user_id", userId);
     await supabase.from("habit_logs").delete().eq("habit_id", id);
     load();
@@ -269,7 +361,11 @@ export default function HabitsScreen() {
             >
               <Pressable
                 onPress={() => setShowSettings(!showSettings)}
-                style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
               >
                 <Text style={{ fontSize: 16, fontWeight: "600", color: "#4c1d95" }}>
                   🔔 Daily Reminders
@@ -281,7 +377,13 @@ export default function HabitsScreen() {
 
               {showSettings && (
                 <View style={{ marginTop: 12 }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 12 }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      marginBottom: 12,
+                    }}
+                  >
                     <Text style={{ fontSize: 15, color: "#3b0764", flex: 1 }}>
                       Enable Notifications
                     </Text>
@@ -295,10 +397,23 @@ export default function HabitsScreen() {
 
                   {notificationsEnabled && (
                     <>
-                      <Text style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
+                      <Text
+                        style={{
+                          fontSize: 14,
+                          color: "#6b7280",
+                          marginBottom: 8,
+                        }}
+                      >
                         Reminder Time (24-hour format)
                       </Text>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 8,
+                          marginBottom: 12,
+                        }}
+                      >
                         <TextInput
                           value={reminderHour}
                           onChangeText={setReminderHour}
@@ -314,7 +429,9 @@ export default function HabitsScreen() {
                             fontSize: 16,
                           }}
                         />
-                        <Text style={{ fontSize: 18, fontWeight: "bold" }}>:</Text>
+                        <Text style={{ fontSize: 18, fontWeight: "bold" }}>
+                          :
+                        </Text>
                         <TextInput
                           value={reminderMinute}
                           onChangeText={setReminderMinute}
@@ -339,23 +456,11 @@ export default function HabitsScreen() {
                             borderRadius: 8,
                           }}
                         >
-                          <Text style={{ color: "white", fontWeight: "600" }}>Update</Text>
+                          <Text style={{ color: "white", fontWeight: "600" }}>
+                            Update
+                          </Text>
                         </Pressable>
                       </View>
-
-                      {/* <Pressable
-                        onPress={testNotification}
-                        style={{
-                          backgroundColor: "#6366F1",
-                          paddingVertical: 10,
-                          borderRadius: 8,
-                          alignItems: "center",
-                        }}
-                      >
-                        <Text style={{ color: "white", fontWeight: "600" }}>
-                          🔔 Send Test Notification
-                        </Text>
-                      </Pressable> */}
                     </>
                   )}
                 </View>
@@ -441,12 +546,16 @@ export default function HabitsScreen() {
               >
                 Progress:{" "}
                 {habits.length > 0
-                  ? `${habits.filter((h) => h.completedToday).length} / ${habits.length}`
+                  ? `${habits.filter((h) => h.completedToday).length} / ${
+                      habits.length
+                    }`
                   : "No habits yet"}
               </Text>
 
               <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Text style={{ fontSize: 15, color: "#3b0764", marginRight: 10 }}>
+                <Text
+                  style={{ fontSize: 15, color: "#3b0764", marginRight: 10 }}
+                >
                   Show Completed
                 </Text>
                 <Switch
@@ -500,11 +609,41 @@ function HabitCard({
   toggleCompleteToday,
 }: any) {
   const isEditing = editingId === habit.id;
+
+  // Calculate time remaining
+  const getTimeRemaining = () => {
+    if (!habit.lastCompletedAt || habit.completedToday) {
+      return null;
+    }
+
+    const lastCompletion = new Date(habit.lastCompletedAt);
+    const deadline = new Date(lastCompletion.getTime() + 24 * 60 * 60 * 1000);
+
+    const now = new Date();
+    const timeLeft = deadline.getTime() - now.getTime();
+
+    const hoursLeft = timeLeft / (1000 * 60 * 60);
+
+    if (hoursLeft <= 0) {
+      return { text: "Streak broken!", color: "#dc2626", urgent: false };
+    } else if (hoursLeft <= 13) {
+      return {
+        text: `⚠️ ${hoursLeft.toFixed(1)}h left to break streak`,
+        color: "#ea580c",
+        urgent: true,
+      };
+    }
+  };
+
+  const timeRemaining = getTimeRemaining();
+
   return (
     <LinearGradient
       colors={
         habit.completedToday
           ? ["#BBF7D0", "#DCFCE7"]
+          : timeRemaining?.urgent
+          ? ["#FED7AA", "#FECACA"]
           : ["#fff", "rgba(255,255,255,0.8)"]
       }
       style={{
@@ -519,16 +658,32 @@ function HabitCard({
     >
       {/* Title + Streak */}
       {!isEditing ? (
-        <Text
-          style={{
-            fontSize: 17,
-            fontWeight: "700",
-            color: habit.completedToday ? "#16a34a" : "#312e81",
-            textDecorationLine: habit.completedToday ? "line-through" : "none",
-          }}
-        >
-          {habit.title} 🔥 {habit.streak}
-        </Text>
+        <>
+          <Text
+            style={{
+              fontSize: 17,
+              fontWeight: "700",
+              color: habit.completedToday ? "#16a34a" : "#312e81",
+              textDecorationLine: habit.completedToday
+                ? "line-through"
+                : "none",
+            }}
+          >
+            {habit.title} 🔥 {habit.streak}
+          </Text>
+          {timeRemaining && (
+            <Text
+              style={{
+                fontSize: 13,
+                fontWeight: "600",
+                color: timeRemaining.color,
+                marginTop: 4,
+              }}
+            >
+              {timeRemaining.text}
+            </Text>
+          )}
+        </>
       ) : (
         <TextInput
           value={editTitle}
@@ -604,7 +759,9 @@ function HabitCard({
                   setEditDescription(habit.description ?? "");
                 }}
               >
-                <Text style={{ color: "#6366F1", fontWeight: "600" }}>Edit</Text>
+                <Text style={{ color: "#6366F1", fontWeight: "600" }}>
+                  Edit
+                </Text>
               </Pressable>
               <Pressable onPress={() => deleteHabit(habit.id)}>
                 <Text style={{ color: "#EF4444", fontWeight: "600" }}>
