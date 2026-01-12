@@ -1,7 +1,8 @@
 import { Slot, useRouter, useSegments } from "expo-router";
-import { supabase } from "../supabaseClient";
-import React, { useEffect, useState } from "react";
 import * as SplashScreen from "expo-splash-screen";
+import React, { useEffect, useState } from "react";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { supabase } from "../supabaseClient";
 import LoadingScreen from "./LoadingScreen";
 
 SplashScreen.preventAutoHideAsync(); // keep native splash visible
@@ -55,7 +56,9 @@ export default function RootLayout() {
 
   return (
     <AuthContext.Provider value={{ session }}>
-      <Slot />
+      <SafeAreaProvider>
+        <Slot />
+      </SafeAreaProvider>
     </AuthContext.Provider>
   );
 }

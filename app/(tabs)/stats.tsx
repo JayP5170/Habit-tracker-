@@ -1,14 +1,15 @@
+import { LinearGradient } from "expo-linear-gradient";
 import React, { JSX, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
   ActivityIndicator,
   Alert,
   StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { Calendar } from "react-native-calendars";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../supabaseClient";
 import { useAuth } from "../_layout";
 
@@ -17,41 +18,45 @@ type Habit = {
   title: string;
   description?: string | null;
   created_at?: string | null;
-  streak?: number; // added optional streak
+  streak?: number;
+  color?: string;
 };
 
 type HabitLog = {
   id: string;
   habit_id: string;
   user_id: string;
-  day: string; // YYYY-MM-DD
+  day: string;
   completed: boolean;
 };
 
 type MarkedDates = {
   [date: string]: {
-    selected?: boolean;
-    selectedColor?: string;
-    marked?: boolean;
-    dotColor?: string;
+    dots?: { color: string; key: string }[];
   };
+};
+
+// Function to generate distinct colors dynamically
+const generateColor = (index: number): string => {
+  const hue = (index * 137.508) % 360; // Golden angle for good distribution
+  return `hsl(${hue}, 70%, 50%)`;
 };
 
 export default function StatsScreen(): JSX.Element {
   const { session } = useAuth();
   const userId = session?.user?.id ?? null;
 
+  const insets = useSafeAreaInsets();
+
   const [habits, setHabits] = useState<Habit[]>([]);
-  const [selectedHabitId, setSelectedHabitId] = useState<string | null>(null);
   const [logs, setLogs] = useState<HabitLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [calendarLoading, setCalendarLoading] = useState<boolean>(false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  // Load habits (now fetches streak for each habit and sorts by highest streak)
+  // Load all habits and assign colors
   const loadHabits = useCallback(async () => {
     if (!userId) {
       setHabits([]);
-      setSelectedHabitId(null);
       return;
     }
 
@@ -67,9 +72,9 @@ export default function StatsScreen(): JSX.Element {
 
       const rows = data || [];
 
-      // fetch streak for each habit using your existing RPC
+      // fetch streak for each habit
       const withStreaks = await Promise.all(
-        rows.map(async (h: any) => {
+        rows.map(async (h: any, index: number) => {
           try {
             const { data: streakData, error: rpcErr } = await supabase.rpc(
               "current_streak",
@@ -81,141 +86,83 @@ export default function StatsScreen(): JSX.Element {
             return {
               ...h,
               streak: (streakData as any) ?? 0,
+              color: generateColor(index),
             } as Habit;
           } catch (rpcCatchErr) {
             console.error("RPC catch error:", rpcCatchErr);
             return {
               ...h,
               streak: 0,
+              color: generateColor(index),
             } as Habit;
           }
         })
       );
 
-      // sort by streak desc (highest first). keep stable sort if equal (by created_at)
       withStreaks.sort((a, b) => (b.streak ?? 0) - (a.streak ?? 0));
-
       setHabits(withStreaks);
-
-      // if nothing selected, pick first (highest streak)
-      if (withStreaks.length > 0 && !selectedHabitId) {
-        setSelectedHabitId(withStreaks[0].id);
-      }
     } catch (err) {
       console.error(err);
       Alert.alert("Error", "Failed to load habits.");
     } finally {
       setLoading(false);
     }
-  }, [userId, selectedHabitId]);
+  }, [userId]);
 
-  // Load logs for the selected habit (only completed entries)
-  const loadLogs = useCallback(
-    async (habitId: string | null) => {
-      if (!habitId || !userId) {
-        setLogs([]);
-        return;
-      }
+  // Load logs for ALL habits
+  const loadAllLogs = useCallback(async () => {
+    if (!userId) {
+      setLogs([]);
+      return;
+    }
 
-      setCalendarLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from("habit_logs")
-          .select("id, habit_id, user_id, day, completed")
-          .eq("user_id", userId)
-          .eq("habit_id", habitId)
-          .eq("completed", true)
-          .order("day", { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from("habit_logs")
+        .select("id, habit_id, user_id, day, completed")
+        .eq("user_id", userId)
+        .eq("completed", true)
+        .order("day", { ascending: true });
 
-        if (error) throw error;
+      if (error) throw error;
 
-        setLogs(data || []);
-      } catch (err) {
-        console.error(err);
-        Alert.alert("Error", "Failed to load logs.");
-      } finally {
-        setCalendarLoading(false);
-      }
-    },
-    [userId]
-  );
+      setLogs(data || []);
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Error", "Failed to load logs.");
+    }
+  }, [userId]);
 
   // Initial load
   useEffect(() => {
     loadHabits();
-  }, [loadHabits]);
+    loadAllLogs();
+  }, [loadHabits, loadAllLogs]);
 
-  // Reload logs when selected habit changes
-  useEffect(() => {
-    if (selectedHabitId) loadLogs(selectedHabitId);
-    else setLogs([]);
-  }, [selectedHabitId, loadLogs]);
-
-  // Build marked dates for calendar (read-only)
+  // Build marked dates with colored dots
   const markedDates = useMemo<MarkedDates>(() => {
     const out: MarkedDates = {};
     logs.forEach((log) => {
-      if (log.day)
-        out[log.day] = {
-          selected: true,
-          selectedColor: "#16a34a",
-          marked: true,
-          dotColor: "#16a34a",
-        };
+      const habit = habits.find((h) => h.id === log.habit_id);
+      if (habit && log.day) {
+        if (!out[log.day]) {
+          out[log.day] = { dots: [] };
+        }
+        out[log.day].dots?.push({
+          color: habit.color || "#16a34a",
+          key: habit.id,
+        });
+      }
     });
     return out;
-  }, [logs]);
+  }, [logs, habits]);
 
-  // === Current streak (counts only when latest completed day is today OR yesterday grace)
-  const computeCurrentStreakEndingToday = (logsList: HabitLog[]): number => {
-    if (!logsList || logsList.length === 0) return 0;
-
-    const uniqueDays = Array.from(new Set(logsList.map((l) => l.day))).sort();
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    // helper to walk backwards consecutive days
-    const countStreak = (days: string[], startIndex: number) => {
-      let streak = 1;
-      for (let i = startIndex; i > 0; i--) {
-        const cur = new Date(days[i]);
-        const prev = new Date(days[i - 1]);
-        const diff = Math.round(
-          (cur.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24)
-        );
-        if (diff === 1) streak++;
-        else break;
-      }
-      return streak;
-    };
-
-    // check if today completed
-    if (uniqueDays.includes(today)) {
-      const lastIndex = uniqueDays.length - 1;
-      return countStreak(uniqueDays, lastIndex);
-    }
-
-    // 1-day grace: if yesterday completed, count streak ending yesterday
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    if (!uniqueDays.includes(yesterday)) return 0;
-    const yIndex = uniqueDays.indexOf(yesterday);
-    return countStreak(uniqueDays, yIndex);
-  };
-
-  const streakCount = useMemo(() => computeCurrentStreakEndingToday(logs), [logs]);
-
-  const renderHabitItem = ({ item }: { item: Habit }) => {
-    const selected = item.id === selectedHabitId;
-    return (
-      <TouchableOpacity
-        onPress={() => setSelectedHabitId(item.id)}
-        style={[styles.habitChip, selected && styles.habitChipSelected]}
-      >
-        <Text style={[styles.habitChipText, selected && styles.habitChipTextSel]}>
-          {item.title}
-        </Text>
-      </TouchableOpacity>
-    );
+  // Get habits for a specific date
+  const getHabitsForDate = (date: string): Habit[] => {
+    const habitIds = logs
+      .filter((log) => log.day === date)
+      .map((log) => log.habit_id);
+    return habits.filter((h) => habitIds.includes(h.id));
   };
 
   if (loading) {
@@ -227,85 +174,146 @@ export default function StatsScreen(): JSX.Element {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.heading}>📅 Habit Progress</Text>
+    <LinearGradient
+      colors={["#FDEFF9", "#E0C3FC", "#C2E9FB"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={{ flex: 1 }}
+    >
+      <View style={{ flex: 1, paddingTop: insets.top }}>
+        <Text style={styles.heading}>📅 Habit Progress</Text>
 
-      {habits.length === 0 ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyText}>No habits yet. Add one to track progress.</Text>
-        </View>
-      ) : (
-        <>
-          {/* Habits List */}
-          <View style={{ height: 64 }}>
-            <FlatList
-              data={habits}
-              keyExtractor={(h) => h.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              renderItem={renderHabitItem}
-              contentContainerStyle={{ paddingHorizontal: 8, alignItems: "center" }}
-            />
+        {habits.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>
+              No habits yet. Add one to track progress.
+            </Text>
           </View>
-
-          {/* Streak Count (only counts if today completed or yesterday grace) */}
-          <Text style={styles.streakText}>🔥 Streak: {streakCount} days</Text>
-
-          <View style={{ marginTop: 12 }}>
-            {calendarLoading ? (
-              <ActivityIndicator size="large" color="#7C3AED" />
-            ) : (
+        ) : (
+          <View style={{ flex: 1 }}>
+            {/* Calendar */}
+            <View style={{ paddingHorizontal: 16 }}>
               <Calendar
                 markingType="multi-dot"
                 markedDates={markedDates}
-                onDayPress={() => {}} // read-only
+                onDayPress={(day) => {
+                  const habitsForDate = getHabitsForDate(day.dateString);
+                  if (habitsForDate.length > 0) {
+                    setSelectedDate(day.dateString);
+                  }
+                }}
                 theme={{
-                  selectedDayBackgroundColor: "#16a34a",
                   todayTextColor: "#7C3AED",
                   arrowColor: "#7C3AED",
                   monthTextColor: "#4c1d95",
+                  textMonthFontWeight: "700",
                 }}
                 style={styles.calendar}
               />
-            )}
+
+              {/* Tooltip for selected date */}
+              {selectedDate && getHabitsForDate(selectedDate).length > 0 && (
+                <View style={styles.tooltip}>
+                  <View style={styles.tooltipHeader}>
+                    <Text style={styles.tooltipDate}>
+                      {new Date(selectedDate + "T00:00:00").toLocaleDateString(
+                        "en-US",
+                        {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        }
+                      )}
+                    </Text>
+                    <TouchableOpacity onPress={() => setSelectedDate(null)}>
+                      <Text style={styles.tooltipClose}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.tooltipContent}>
+                    {getHabitsForDate(selectedDate).map((habit) => (
+                      <View key={habit.id} style={styles.tooltipItem}>
+                        <View
+                          style={[
+                            styles.tooltipDot,
+                            { backgroundColor: habit.color },
+                          ]}
+                        />
+                        <Text style={styles.tooltipText}>{habit.title}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+            </View>
           </View>
-        </>
-      )}
-    </View>
+        )}
+      </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: "transparent" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   heading: {
     fontSize: 22,
     fontWeight: "700",
     color: "#4c1d95",
     textAlign: "center",
+    marginBottom: 16,
   },
-  streakText: {
-    marginTop: 10,
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#16a34a",
-    textAlign: "center",
-  },
-  habitChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 20,
-    marginRight: 10,
-  },
-  habitChipSelected: { backgroundColor: "#7C3AED" },
-  habitChipText: { color: "#111827", fontWeight: "600" },
-  habitChipTextSel: { color: "white" },
   calendar: {
-    borderRadius: 14,
+    borderRadius: 6,
     elevation: 2,
     backgroundColor: "white",
   },
   empty: { padding: 20, alignItems: "center" },
   emptyText: { color: "#6b7280" },
+  tooltip: {
+    marginTop: 12,
+    backgroundColor: "white",
+    borderRadius: 12,
+    padding: 16,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+  },
+  tooltipHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+  },
+  tooltipDate: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#4c1d95",
+  },
+  tooltipClose: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: "#6b7280",
+  },
+  tooltipContent: {
+    gap: 8,
+  },
+  tooltipItem: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  tooltipDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 10,
+  },
+  tooltipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+  },
 });

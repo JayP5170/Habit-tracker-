@@ -7,13 +7,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../supabaseClient";
 import {
   registerForPushNotifications,
@@ -36,6 +36,8 @@ export default function HabitsScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id;
 
+  const insets = useSafeAreaInsets();
+
   const [habits, setHabits] = React.useState<Habit[]>([]);
   const [newTitle, setNewTitle] = React.useState("");
   const [newDescription, setNewDescription] = React.useState("");
@@ -43,7 +45,7 @@ export default function HabitsScreen() {
   const [editTitle, setEditTitle] = React.useState("");
   const [editDescription, setEditDescription] = React.useState("");
   const [showCompleted, setShowCompleted] = React.useState(true);
-  
+
   // Notification settings
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(false);
   const [reminderHour, setReminderHour] = React.useState("09");
@@ -187,7 +189,7 @@ export default function HabitsScreen() {
           h: h.id,
           u: userId,
         });
-        
+
         const todayLog = logsData?.find((l: any) => l.habit_id === h.id);
         const completedToday = todayLog?.completed ?? false;
 
@@ -329,7 +331,7 @@ export default function HabitsScreen() {
       end={{ x: 1, y: 1 }}
       style={{ flex: 1 }}
     >
-      <SafeAreaView style={{ flex: 1, padding: 16 }}>
+      <View style={{ flex: 1, paddingTop: insets.top, paddingInline: 16 }}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1, padding: Platform.OS === "ios" ? 16 : 0 }}
@@ -367,7 +369,9 @@ export default function HabitsScreen() {
                   alignItems: "center",
                 }}
               >
-                <Text style={{ fontSize: 16, fontWeight: "600", color: "#4c1d95" }}>
+                <Text
+                  style={{ fontSize: 16, fontWeight: "600", color: "#4c1d95" }}
+                >
                   🔔 Daily Reminders
                 </Text>
                 <Text style={{ color: "#6366F1" }}>
@@ -591,7 +595,7 @@ export default function HabitsScreen() {
             />
           </ScrollView>
         </KeyboardAvoidingView>
-      </SafeAreaView>
+      </View>
     </LinearGradient>
   );
 }

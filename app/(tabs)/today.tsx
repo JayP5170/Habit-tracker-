@@ -6,7 +6,6 @@ import {
   TextInput,
   Pressable,
   Switch,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -15,6 +14,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { supabase } from "../../supabaseClient";
 import { useAuth } from "../_layout";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type Task = {
   id: string;
@@ -27,6 +27,8 @@ type Task = {
 export default function TodayScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id;
+
+  const insets = useSafeAreaInsets();
 
   const [tasks, setTasks] = React.useState<Task[]>([]);
   const [newTitle, setNewTitle] = React.useState("");
@@ -153,7 +155,7 @@ export default function TodayScreen() {
       end={{ x: 1, y: 1 }}
       style={{ flex: 1 }}
     >
-      <SafeAreaView style={{ flex: 1, padding: 16 }}>
+      <View style={{ flex: 1, paddingTop: insets.top, paddingInline: 16 }}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1, padding: Platform.OS === "ios" ? 16 : 0 }}
@@ -307,7 +309,7 @@ export default function TodayScreen() {
             />
           </ScrollView>
         </KeyboardAvoidingView>
-      </SafeAreaView>
+      </View>
     </LinearGradient>
   );
 }
