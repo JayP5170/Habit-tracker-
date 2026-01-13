@@ -1,3 +1,4 @@
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { JSX, useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -181,7 +182,10 @@ export default function StatsScreen(): JSX.Element {
       style={{ flex: 1 }}
     >
       <View style={{ flex: 1, paddingTop: insets.top }}>
-        <Text style={styles.heading}>📅 Habit Progress</Text>
+        <Text style={styles.heading}>
+          <MaterialCommunityIcons name="calendar-range" size={22} /> Habit
+          Progress
+        </Text>
 
         {habits.length === 0 ? (
           <View style={styles.empty}>
@@ -271,7 +275,7 @@ const styles = StyleSheet.create({
   tooltip: {
     marginTop: 12,
     backgroundColor: "white",
-    borderRadius: 12,
+    borderRadius: 6,
     padding: 16,
     elevation: 3,
     shadowColor: "#000",

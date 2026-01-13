@@ -2,9 +2,12 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Notifications from "expo-notifications";
 import React from "react";
 import {
+  ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -32,6 +35,102 @@ type Habit = {
   notificationScheduled?: boolean;
 };
 
+// Shimmer Effect Component
+function ShimmerPlaceholder({
+  width = "100%",
+  height = 20,
+  borderRadius = 6,
+}: {
+  width?: string | number;
+  height?: number;
+  borderRadius?: number;
+}) {
+  const shimmerAnim = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmerAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(shimmerAnim, {
+          toValue: 0,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, []);
+
+  const opacity = shimmerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 0.7],
+  });
+
+  return (
+    <Animated.View
+      style={{
+        width,
+        height,
+        borderRadius,
+        backgroundColor: "#e5e7eb",
+        opacity,
+      }}
+    />
+  );
+}
+
+// Skeleton Loader for Habit Card
+function HabitCardSkeleton() {
+  return (
+    <View
+      style={{
+        backgroundColor: "#F5F3FF",
+        padding: 16,
+        borderRadius: 12,
+        marginBottom: 12,
+        flexDirection: "row",
+        alignItems: "center",
+      }}
+    >
+      {/* Content Section */}
+      <View style={{ flex: 1, marginRight: 12 }}>
+        {/* Title */}
+        <ShimmerPlaceholder width="60%" height={16} borderRadius={4} />
+
+        {/* Streak + warning row */}
+        <View style={{ flexDirection: "row", marginTop: 6 }}>
+          <ShimmerPlaceholder width={80} height={14} borderRadius={4} />
+          <View style={{ marginLeft: 8 }}>
+            <ShimmerPlaceholder width={70} height={12} borderRadius={4} />
+          </View>
+        </View>
+
+        {/* Description */}
+        <View style={{ marginTop: 6 }}>
+          <ShimmerPlaceholder width="85%" height={13} borderRadius={4} />
+        </View>
+      </View>
+
+      {/* Actions Section */}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        {/* Edit icon */}
+        <ShimmerPlaceholder width={20} height={20} borderRadius={10} />
+
+        {/* Delete icon */}
+        <ShimmerPlaceholder width={20} height={20} borderRadius={10} />
+
+        {/* Checkbox */}
+        <ShimmerPlaceholder width={28} height={28} borderRadius={14} />
+      </View>
+    </View>
+  );
+}
+
 export default function HabitsScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id;
@@ -39,12 +138,18 @@ export default function HabitsScreen() {
   const insets = useSafeAreaInsets();
 
   const [habits, setHabits] = React.useState<Habit[]>([]);
-  const [newTitle, setNewTitle] = React.useState("");
-  const [newDescription, setNewDescription] = React.useState("");
-  const [editingId, setEditingId] = React.useState<string | null>(null);
-  const [editTitle, setEditTitle] = React.useState("");
-  const [editDescription, setEditDescription] = React.useState("");
   const [showCompleted, setShowCompleted] = React.useState(true);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [isSaving, setIsSaving] = React.useState(false);
+  const [updatingHabitId, setUpdatingHabitId] = React.useState<string | null>(
+    null
+  );
+
+  // Modal state
+  const [modalVisible, setModalVisible] = React.useState(false);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [formTitle, setFormTitle] = React.useState("");
+  const [formDescription, setFormDescription] = React.useState("");
 
   // Notification settings
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(false);
@@ -105,7 +210,6 @@ export default function HabitsScreen() {
       const minute = parseInt(reminderMinute);
       const dailyNotificationId = await scheduleDailyReminder(hour, minute);
 
-      // ✅ Store daily reminder ID too
       scheduledNotificationsRef.current.set(
         "daily_reminder",
         dailyNotificationId
@@ -116,7 +220,6 @@ export default function HabitsScreen() {
         `You'll receive daily reminders at ${reminderHour}:${reminderMinute}`
       );
     } else {
-      // ✅ Cancel using stored ID
       const dailyId = scheduledNotificationsRef.current.get("daily_reminder");
       if (dailyId) {
         await Notifications.cancelScheduledNotificationAsync(dailyId);
@@ -159,77 +262,124 @@ export default function HabitsScreen() {
   const load = React.useCallback(async () => {
     if (!userId) return;
 
-    const today = new Date().toISOString().slice(0, 10);
+    try {
+      setIsLoading(true);
+      const today = new Date().toISOString().slice(0, 10);
 
-    // Get habits
-    const { data: habitsData } = await supabase
-      .from("habits")
-      .select("id, title, description, created_at")
-      .eq("user_id", userId);
+      const { data: habitsData } = await supabase
+        .from("habits")
+        .select("id, title, description, created_at")
+        .eq("user_id", userId);
 
-    // Get today's logs
-    const { data: logsData } = await supabase
-      .from("habit_logs")
-      .select("habit_id, completed, day")
-      .eq("user_id", userId)
-      .eq("day", today);
+      const { data: logsData } = await supabase
+        .from("habit_logs")
+        .select("habit_id, completed, day")
+        .eq("user_id", userId)
+        .eq("day", today);
 
-    // Get last completion time for each habit
-    const { data: lastCompletions } = await supabase
-      .from("habit_logs")
-      .select("habit_id, completed_at")
-      .eq("user_id", userId)
-      .eq("completed", true)
-      .order("completed_at", { ascending: false });
+      const { data: lastCompletions } = await supabase
+        .from("habit_logs")
+        .select("habit_id, completed_at")
+        .eq("user_id", userId)
+        .eq("completed", true)
+        .order("completed_at", { ascending: false });
 
-    const habitsWithExtras = await Promise.all(
-      (habitsData ?? []).map(async (h: any) => {
-        // Get current streak
-        const { data: streakData } = await supabase.rpc("current_streak", {
-          h: h.id,
-          u: userId,
-        });
+      const habitsWithExtras = await Promise.all(
+        (habitsData ?? []).map(async (h: any) => {
+          const { data: streakData } = await supabase.rpc("current_streak", {
+            h: h.id,
+            u: userId,
+          });
 
-        const todayLog = logsData?.find((l: any) => l.habit_id === h.id);
-        const completedToday = todayLog?.completed ?? false;
+          const todayLog = logsData?.find((l: any) => l.habit_id === h.id);
+          const completedToday = todayLog?.completed ?? false;
 
-        const lastCompletion = lastCompletions?.find(
-          (l: any) => l.habit_id === h.id
-        );
+          const lastCompletion = lastCompletions?.find(
+            (l: any) => l.habit_id === h.id
+          );
 
-        return {
-          ...h,
-          streak: streakData ?? 0,
-          completedToday,
-          lastCompletedAt: lastCompletion?.completed_at,
-        };
-      })
-    );
+          return {
+            ...h,
+            streak: streakData ?? 0,
+            completedToday,
+            lastCompletedAt: lastCompletion?.completed_at,
+          };
+        })
+      );
 
-    setHabits(habitsWithExtras);
+      setHabits(habitsWithExtras);
+    } catch (error) {
+      console.error("Error loading habits:", error);
+      Alert.alert("Error", "Failed to load habits. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   }, [userId]);
 
-  // Load habits on mount and set up refresh interval
   React.useEffect(() => {
     load();
-
-    // Refresh every 5 minutes to update time-sensitive data
     const interval = setInterval(load, 5 * 60 * 1000);
-
     return () => clearInterval(interval);
   }, [load]);
 
-  const addHabit = async () => {
-    if (!newTitle.trim()) return alert("Habit title cannot be empty.");
-    await supabase.from("habits").insert({
-      title: newTitle.trim(),
-      user_id: userId,
-      description: newDescription.trim(),
-    });
-    setNewTitle("");
-    setNewDescription("");
-    load();
+  // Open modal for adding new habit
+  const openAddModal = () => {
+    setEditingId(null);
+    setFormTitle("");
+    setFormDescription("");
+    setModalVisible(true);
   };
+
+  // Open modal for editing existing habit
+  const openEditModal = (habit: Habit) => {
+    setEditingId(habit.id);
+    setFormTitle(habit.title);
+    setFormDescription(habit.description || "");
+    setModalVisible(true);
+  };
+
+  // Save habit (add or edit)
+  const saveHabit = async () => {
+    if (!formTitle.trim()) {
+      Alert.alert("Error", "Habit title cannot be empty.");
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+
+      if (editingId) {
+        // Update existing habit
+        await supabase
+          .from("habits")
+          .update({
+            title: formTitle.trim(),
+            description: formDescription.trim(),
+          })
+          .eq("id", editingId)
+          .eq("user_id", userId);
+      } else {
+        // Add new habit
+        await supabase.from("habits").insert({
+          title: formTitle.trim(),
+          user_id: userId,
+          description: formDescription.trim(),
+        });
+      }
+
+      setModalVisible(false);
+      setFormTitle("");
+      setFormDescription("");
+      setEditingId(null);
+      await load();
+    } catch (error) {
+      console.error("Error saving habit:", error);
+      Alert.alert("Error", "Failed to save habit. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const scheduleStreakNotificationAtCompletion = async (habit: Habit) => {
     try {
       const notificationTime = new Date();
@@ -244,85 +394,78 @@ export default function HabitsScreen() {
         trigger: notificationTime,
       });
 
-      // ✅ NOW WE USE IT: Store the notification ID mapped to habit ID
       scheduledNotificationsRef.current.set(habit.id, notificationId);
-
-      console.log(
-        `Scheduled notification ${notificationId} for habit ${habit.id}`
-      );
     } catch (error) {
       console.error("Failed to schedule streak notification:", error);
     }
   };
 
   const toggleCompleteToday = async (habitId: string) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const { data } = await supabase
-      .from("habit_logs")
-      .select("id, completed")
-      .eq("habit_id", habitId)
-      .eq("user_id", userId)
-      .eq("day", today)
-      .maybeSingle();
-    if (!data) {
-      // First, cancel any existing notifications for this habit
-      await cancelHabitNotifications(habitId);
+    try {
+      setUpdatingHabitId(habitId);
+      const today = new Date().toISOString().slice(0, 10);
 
-      // Insert the completion log
-      await supabase.from("habit_logs").insert({
-        habit_id: habitId,
-        user_id: userId,
-        day: today,
-        completed: true,
-        completed_at: new Date().toISOString(),
-      });
+      const { data } = await supabase
+        .from("habit_logs")
+        .select("id, completed")
+        .eq("habit_id", habitId)
+        .eq("user_id", userId)
+        .eq("day", today)
+        .maybeSingle();
 
-      const habit = habits.find((h) => h.id === habitId);
-      if (habit) {
-        await scheduleStreakNotificationAtCompletion(habit);
+      if (!data) {
+        await cancelHabitNotifications(habitId);
+
+        await supabase.from("habit_logs").insert({
+          habit_id: habitId,
+          user_id: userId,
+          day: today,
+          completed: true,
+          completed_at: new Date().toISOString(),
+        });
+
+        const habit = habits.find((h) => h.id === habitId);
+        if (habit) {
+          await scheduleStreakNotificationAtCompletion(habit);
+        }
       }
-    }
 
-    load();
+      await load();
+    } catch (error) {
+      console.error("Error updating habit:", error);
+      Alert.alert("Error", "Failed to update habit. Please try again.");
+    } finally {
+      setUpdatingHabitId(null);
+    }
   };
 
-  // Add this helper function
   const cancelHabitNotifications = async (habitId: string) => {
     const notificationId = scheduledNotificationsRef.current.get(habitId);
 
     if (notificationId) {
-      // Cancel using the specific ID (much faster!)
       await Notifications.cancelScheduledNotificationAsync(notificationId);
-
       scheduledNotificationsRef.current.delete(habitId);
     }
   };
 
-  const saveEditHabit = async () => {
-    if (!editingId) return;
-    const title = editTitle.trim();
-    if (!title) return alert("Habit title cannot be empty.");
-    await supabase
-      .from("habits")
-      .update({
-        title: editTitle.trim(),
-        description: editDescription.trim(),
-      })
-      .eq("id", editingId)
-      .eq("user_id", userId);
-    setEditingId(null);
-    setEditTitle("");
-    setEditDescription("");
-    load();
+  const deleteHabit = async (id: string) => {
+    try {
+      setUpdatingHabitId(id);
+      await cancelHabitNotifications(id);
+      await supabase.from("habits").delete().eq("id", id).eq("user_id", userId);
+      await supabase.from("habit_logs").delete().eq("habit_id", id);
+      await load();
+    } catch (error) {
+      console.error("Error deleting habit:", error);
+      Alert.alert("Error", "Failed to delete habit. Please try again.");
+    } finally {
+      setUpdatingHabitId(null);
+    }
   };
 
-  const deleteHabit = async (id: string) => {
-    // Cancel notifications first
-    await cancelHabitNotifications(id);
-    await supabase.from("habits").delete().eq("id", id).eq("user_id", userId);
-    await supabase.from("habit_logs").delete().eq("habit_id", id);
-    load();
-  };
+  const filteredHabits = [...habits]
+    .sort((a, b) => b.streak - a.streak)
+    .filter((h) => (showCompleted ? true : !h.completedToday));
 
   return (
     <LinearGradient
@@ -349,7 +492,7 @@ export default function HabitsScreen() {
                 marginBottom: 20,
               }}
             >
-              🌈 My Habits
+              💪 My Habits
             </Text>
 
             {/* Notification Settings Card */}
@@ -357,7 +500,7 @@ export default function HabitsScreen() {
               style={{
                 backgroundColor: "rgba(255,255,255,0.8)",
                 padding: 14,
-                borderRadius: 16,
+                borderRadius: 6,
                 marginBottom: 16,
               }}
             >
@@ -427,7 +570,7 @@ export default function HabitsScreen() {
                           style={{
                             backgroundColor: "#fff",
                             padding: 10,
-                            borderRadius: 8,
+                            borderRadius: 6,
                             width: 60,
                             textAlign: "center",
                             fontSize: 16,
@@ -445,7 +588,7 @@ export default function HabitsScreen() {
                           style={{
                             backgroundColor: "#fff",
                             padding: 10,
-                            borderRadius: 8,
+                            borderRadius: 6,
                             width: 60,
                             textAlign: "center",
                             fontSize: 16,
@@ -457,7 +600,7 @@ export default function HabitsScreen() {
                             backgroundColor: "#7C3AED",
                             paddingHorizontal: 16,
                             paddingVertical: 10,
-                            borderRadius: 8,
+                            borderRadius: 6,
                           }}
                         >
                           <Text style={{ color: "white", fontWeight: "600" }}>
@@ -471,130 +614,260 @@ export default function HabitsScreen() {
               )}
             </View>
 
-            {/* Input Card */}
-            <View
-              style={{
-                backgroundColor: "rgba(255,255,255,0.7)",
-                padding: 14,
-                borderRadius: 16,
-                marginBottom: 20,
-                shadowColor: "#aaa",
-                shadowOpacity: 0.2,
-                shadowOffset: { width: 0, height: 3 },
-                shadowRadius: 6,
-              }}
-            >
-              <TextInput
-                value={newTitle}
-                onChangeText={setNewTitle}
-                placeholder="Add a new habit..."
-                placeholderTextColor="#6b7280"
-                style={{
-                  borderRadius: 10,
-                  padding: 12,
-                  backgroundColor: "#fff",
-                  marginBottom: 10,
-                }}
-              />
-              <TextInput
-                value={newDescription}
-                onChangeText={setNewDescription}
-                placeholder="Why or how? (optional)"
-                placeholderTextColor="#9ca3af"
-                multiline
-                style={{
-                  borderRadius: 10,
-                  padding: 12,
-                  backgroundColor: "#fff",
-                  minHeight: 60,
-                }}
-              />
-              <Pressable
-                onPress={addHabit}
-                style={{
-                  backgroundColor: "#7C3AED",
-                  paddingVertical: 12,
-                  borderRadius: 10,
-                  alignItems: "center",
-                  marginTop: 10,
-                  shadowColor: "#7C3AED",
-                  shadowOpacity: 0.25,
-                  shadowOffset: { width: 0, height: 4 },
-                  shadowRadius: 6,
-                }}
-              >
-                <Text
-                  style={{ color: "white", fontSize: 16, fontWeight: "600" }}
-                >
-                  + Add Habit
-                </Text>
-              </Pressable>
-            </View>
-
             {/* Stats Card */}
             <View
               style={{
                 backgroundColor: "rgba(255,255,255,0.6)",
                 padding: 14,
-                borderRadius: 16,
+                borderRadius: 6,
                 marginBottom: 12,
               }}
             >
-              <Text
-                style={{
-                  fontSize: 16,
-                  fontWeight: "600",
-                  color: "#4c1d95",
-                  marginBottom: 6,
-                }}
-              >
-                Progress:{" "}
-                {habits.length > 0
-                  ? `${habits.filter((h) => h.completedToday).length} / ${
-                      habits.length
-                    }`
-                  : "No habits yet"}
-              </Text>
+              {isLoading ? (
+                <>
+                  <ShimmerPlaceholder width="60%" height={18} />
+                  <View style={{ marginTop: 10 }}>
+                    <ShimmerPlaceholder width="40%" height={16} />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text
+                    style={{
+                      fontSize: 16,
+                      fontWeight: "600",
+                      color: "#4c1d95",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Progress:{" "}
+                    {habits.length > 0
+                      ? `${habits.filter((h) => h.completedToday).length} / ${
+                          habits.length
+                        }`
+                      : "No habits yet"}
+                  </Text>
 
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Text
-                  style={{ fontSize: 15, color: "#3b0764", marginRight: 10 }}
-                >
-                  Show Completed
-                </Text>
-                <Switch
-                  value={showCompleted}
-                  onValueChange={setShowCompleted}
-                  trackColor={{ false: "#d4d4d8", true: "#c4b5fd" }}
-                  thumbColor={showCompleted ? "#7C3AED" : "#f4f3f4"}
-                />
-              </View>
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    <Text
+                      style={{
+                        fontSize: 15,
+                        color: "#3b0764",
+                        marginRight: 10,
+                      }}
+                    >
+                      Show All
+                    </Text>
+                    <Switch
+                      value={showCompleted}
+                      onValueChange={setShowCompleted}
+                      trackColor={{ false: "#d4d4d8", true: "#c4b5fd" }}
+                      thumbColor={showCompleted ? "#7C3AED" : "#f4f3f4"}
+                    />
+                  </View>
+                </>
+              )}
             </View>
 
             {/* Habit List */}
-            <FlatList
-              data={[...habits]
-                .sort((a, b) => b.streak - a.streak)
-                .filter((h) => (showCompleted ? true : !h.completedToday))}
-              keyExtractor={(h) => h.id}
-              scrollEnabled={false}
-              renderItem={({ item }) => (
-                <HabitCard
-                  habit={item}
-                  editingId={editingId}
-                  setEditingId={setEditingId}
-                  editTitle={editTitle}
-                  setEditTitle={setEditTitle}
-                  editDescription={editDescription}
-                  setEditDescription={setEditDescription}
-                  saveEditHabit={saveEditHabit}
-                  deleteHabit={deleteHabit}
-                  toggleCompleteToday={toggleCompleteToday}
-                />
-              )}
-            />
+            {isLoading ? (
+              <>
+                <HabitCardSkeleton />
+                <HabitCardSkeleton />
+                <HabitCardSkeleton />
+              </>
+            ) : filteredHabits.length === 0 ? (
+              <View
+                style={{
+                  backgroundColor: "rgba(255,255,255,0.7)",
+                  padding: 32,
+                  borderRadius: 12,
+                  alignItems: "center",
+                  marginTop: 20,
+                }}
+              >
+                <Text style={{ fontSize: 48, marginBottom: 12 }}>🎯</Text>
+                <Text
+                  style={{
+                    fontSize: 18,
+                    fontWeight: "600",
+                    color: "#4c1d95",
+                    marginBottom: 8,
+                  }}
+                >
+                  No habits yet
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 14,
+                    color: "#6b7280",
+                    textAlign: "center",
+                  }}
+                >
+                  Tap the + button to create your first habit
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filteredHabits}
+                keyExtractor={(h) => h.id}
+                scrollEnabled={false}
+                renderItem={({ item }) => (
+                  <HabitCard
+                    habit={item}
+                    deleteHabit={deleteHabit}
+                    toggleCompleteToday={toggleCompleteToday}
+                    onEdit={openEditModal}
+                    isUpdating={updatingHabitId === item.id}
+                  />
+                )}
+              />
+            )}
           </ScrollView>
         </KeyboardAvoidingView>
+
+        {/* Floating Action Button */}
+        <Pressable
+          onPress={openAddModal}
+          style={{
+            position: "absolute",
+            right: 16,
+            bottom: insets.bottom,
+            width: 60,
+            height: 60,
+            borderRadius: 30,
+            backgroundColor: "#7C3AED",
+            justifyContent: "center",
+            alignItems: "center",
+            shadowColor: "#000",
+            shadowOpacity: 0.3,
+            shadowOffset: { width: 0, height: 4 },
+            shadowRadius: 8,
+            elevation: 8,
+          }}
+        >
+          <Text style={{ color: "white", fontSize: 32, fontWeight: "300" }}>
+            +
+          </Text>
+        </Pressable>
+
+        {/* Modal for Add/Edit */}
+        <Modal
+          visible={modalVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setModalVisible(false)}
+        >
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: "rgba(0,0,0,0.5)",
+              justifyContent: "flex-end",
+            }}
+          >
+            <KeyboardAvoidingView
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
+            >
+              <View
+                style={{
+                  backgroundColor: "white",
+                  borderTopLeftRadius: 24,
+                  borderTopRightRadius: 24,
+                  padding: 24,
+                  paddingBottom: insets.bottom + 24,
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 20,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 22,
+                      fontWeight: "700",
+                      color: "#4c1d95",
+                    }}
+                  >
+                    {editingId ? "Edit Habit" : "Add New Habit"}
+                  </Text>
+                  <Pressable onPress={() => setModalVisible(false)}>
+                    <Text style={{ fontSize: 28, color: "#6b7280" }}>×</Text>
+                  </Pressable>
+                </View>
+
+                <TextInput
+                  value={formTitle}
+                  onChangeText={setFormTitle}
+                  placeholder="Habit title"
+                  placeholderTextColor="#9ca3af"
+                  editable={!isSaving}
+                  style={{
+                    backgroundColor: "#f3f4f6",
+                    borderRadius: 6,
+                    padding: 16,
+                    fontSize: 16,
+                    marginBottom: 12,
+                    opacity: isSaving ? 0.6 : 1,
+                  }}
+                />
+
+                <TextInput
+                  value={formDescription}
+                  onChangeText={setFormDescription}
+                  placeholder="Why or how? (optional)"
+                  placeholderTextColor="#9ca3af"
+                  multiline
+                  editable={!isSaving}
+                  style={{
+                    backgroundColor: "#f3f4f6",
+                    borderRadius: 6,
+                    padding: 16,
+                    fontSize: 16,
+                    minHeight: 100,
+                    textAlignVertical: "top",
+                    marginBottom: 20,
+                    opacity: isSaving ? 0.6 : 1,
+                  }}
+                />
+
+                <Pressable
+                  onPress={saveHabit}
+                  disabled={isSaving}
+                  style={{
+                    backgroundColor: isSaving ? "#9333EA" : "#7C3AED",
+                    paddingVertical: 16,
+                    borderRadius: 6,
+                    alignItems: "center",
+                    flexDirection: "row",
+                    justifyContent: "center",
+                    opacity: isSaving ? 0.7 : 1,
+                  }}
+                >
+                  {isSaving && (
+                    <ActivityIndicator
+                      color="white"
+                      size="small"
+                      style={{ marginRight: 8 }}
+                    />
+                  )}
+                  <Text
+                    style={{ color: "white", fontSize: 16, fontWeight: "600" }}
+                  >
+                    {isSaving
+                      ? "Saving..."
+                      : editingId
+                      ? "Save Changes"
+                      : "Add Habit"}
+                  </Text>
+                </Pressable>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </Modal>
       </View>
     </LinearGradient>
   );
@@ -602,19 +875,17 @@ export default function HabitsScreen() {
 
 function HabitCard({
   habit,
-  editingId,
-  setEditingId,
-  editTitle,
-  setEditTitle,
-  editDescription,
-  setEditDescription,
-  saveEditHabit,
   deleteHabit,
   toggleCompleteToday,
-}: any) {
-  const isEditing = editingId === habit.id;
-
-  // Calculate time remaining
+  onEdit,
+  isUpdating,
+}: {
+  habit: Habit;
+  deleteHabit: (id: string) => void;
+  toggleCompleteToday: (id: string) => void;
+  onEdit: (habit: Habit) => void;
+  isUpdating: boolean;
+}) {
   const getTimeRemaining = () => {
     if (!habit.lastCompletedAt || habit.completedToday) {
       return null;
@@ -632,7 +903,7 @@ function HabitCard({
       return { text: "Streak broken!", color: "#dc2626", urgent: false };
     } else if (hoursLeft <= 13) {
       return {
-        text: `⚠️ ${hoursLeft.toFixed(1)}h left to break streak`,
+        text: `⚠️ ${hoursLeft.toFixed(1)}h left`,
         color: "#ea580c",
         urgent: true,
       };
@@ -642,144 +913,118 @@ function HabitCard({
   const timeRemaining = getTimeRemaining();
 
   return (
-    <LinearGradient
-      colors={
-        habit.completedToday
-          ? ["#BBF7D0", "#DCFCE7"]
-          : timeRemaining?.urgent
-          ? ["#FED7AA", "#FECACA"]
-          : ["#fff", "rgba(255,255,255,0.8)"]
-      }
+    <Pressable
+      onLongPress={() => onEdit(habit)}
+      disabled={isUpdating}
       style={{
+        backgroundColor: habit.completedToday
+          ? "#E8F5E9"
+          : timeRemaining?.urgent
+          ? "#FFF3E0"
+          : "#F5F3FF",
         padding: 16,
-        borderRadius: 16,
+        borderRadius: 12,
         marginBottom: 12,
-        shadowColor: "#000",
-        shadowOpacity: 0.08,
-        shadowOffset: { width: 0, height: 2 },
-        shadowRadius: 4,
+        flexDirection: "row",
+        alignItems: "center",
+        opacity: isUpdating ? 0.6 : 1,
       }}
     >
-      {/* Title + Streak */}
-      {!isEditing ? (
-        <>
+      {/* Content Section */}
+      <View style={{ flex: 1, marginRight: 12 }}>
+        <Text
+          style={{
+            fontSize: 16,
+            fontWeight: "600",
+            color: "#1F2937",
+            marginBottom: 4,
+          }}
+        >
+          {habit.title}
+        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Text
             style={{
-              fontSize: 17,
-              fontWeight: "700",
-              color: habit.completedToday ? "#16a34a" : "#312e81",
-              textDecorationLine: habit.completedToday
-                ? "line-through"
-                : "none",
+              fontSize: 14,
+              fontWeight: "500",
+              color: habit.completedToday ? "#10B981" : "#F59E0B",
             }}
           >
-            {habit.title} 🔥 {habit.streak}
+            🔥 {habit.streak} Days
           </Text>
           {timeRemaining && (
             <Text
               style={{
-                fontSize: 13,
-                fontWeight: "600",
+                fontSize: 12,
+                fontWeight: "500",
                 color: timeRemaining.color,
-                marginTop: 4,
               }}
             >
               {timeRemaining.text}
             </Text>
           )}
-        </>
-      ) : (
-        <TextInput
-          value={editTitle}
-          onChangeText={setEditTitle}
-          placeholder="Edit habit title"
-          style={{
-            backgroundColor: "#f9fafb",
-            borderRadius: 8,
-            padding: 8,
-          }}
-        />
-      )}
-
-      {/* Description */}
-      {!isEditing ? (
-        habit.description ? (
-          <Text style={{ marginTop: 6, color: "#6b7280" }}>
+        </View>
+        {habit.description && (
+          <Text
+            style={{
+              fontSize: 13,
+              color: "#6B7280",
+              marginTop: 4,
+            }}
+            numberOfLines={1}
+          >
             {habit.description}
           </Text>
-        ) : null
-      ) : (
-        <TextInput
-          value={editDescription}
-          onChangeText={setEditDescription}
-          placeholder="Edit description"
-          multiline
-          style={{
-            backgroundColor: "#f9fafb",
-            borderRadius: 8,
-            padding: 8,
-            minHeight: 60,
-            marginTop: 6,
-          }}
-        />
-      )}
+        )}
+      </View>
 
-      <Text style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>
-        {new Date(habit.created_at).toLocaleString()}
-      </Text>
+      {/* Actions Section */}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        {!habit.completedToday && (
+          <>
+            <Pressable onPress={() => onEdit(habit)} disabled={isUpdating}>
+              <Text style={{ fontSize: 20, opacity: isUpdating ? 0.5 : 1 }}>
+                ✏️
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => deleteHabit(habit.id)}
+              disabled={isUpdating}
+            >
+              <Text style={{ fontSize: 20, opacity: isUpdating ? 0.5 : 1 }}>
+                🗑️
+              </Text>
+            </Pressable>
+          </>
+        )}
 
-      {!isEditing && (
+        {/* Checkbox */}
         <Pressable
           onPress={() => toggleCompleteToday(habit.id)}
+          disabled={isUpdating || habit.completedToday}
           style={{
-            marginTop: 10,
-            backgroundColor: habit.completedToday ? "#4ade80" : "#7C3AED",
-            paddingVertical: 8,
-            borderRadius: 8,
+            width: 28,
+            height: 28,
+            borderRadius: 14,
+            backgroundColor: habit.completedToday ? "#10B981" : "#E5E7EB",
+            justifyContent: "center",
             alignItems: "center",
+            borderWidth: 2,
+            borderColor: habit.completedToday ? "#10B981" : "#D1D5DB",
+            opacity: habit.completedToday ? 1 : isUpdating ? 0.5 : 1,
           }}
         >
-          <Text style={{ color: "white", fontWeight: "600" }}>
-            {habit.completedToday ? "🎉 Done" : "Mark as Done"}
-          </Text>
-        </Pressable>
-      )}
-
-      {!habit.completedToday && (
-        <View
-          style={{
-            flexDirection: "row",
-            justifyContent: "flex-end",
-            marginTop: 8,
-            gap: 16,
-          }}
-        >
-          {!isEditing ? (
-            <>
-              <Pressable
-                onPress={() => {
-                  setEditingId(habit.id);
-                  setEditTitle(habit.title);
-                  setEditDescription(habit.description ?? "");
-                }}
-              >
-                <Text style={{ color: "#6366F1", fontWeight: "600" }}>
-                  Edit
-                </Text>
-              </Pressable>
-              <Pressable onPress={() => deleteHabit(habit.id)}>
-                <Text style={{ color: "#EF4444", fontWeight: "600" }}>
-                  Delete
-                </Text>
-              </Pressable>
-            </>
+          {isUpdating ? (
+            <ActivityIndicator color="white" size="small" />
           ) : (
-            <Pressable onPress={saveEditHabit}>
-              <Text style={{ color: "#16a34a", fontWeight: "700" }}>Save</Text>
-            </Pressable>
+            habit.completedToday && (
+              <Text style={{ color: "white", fontSize: 16, fontWeight: "700" }}>
+                ✓
+              </Text>
+            )
           )}
-        </View>
-      )}
-    </LinearGradient>
+        </Pressable>
+      </View>
+    </Pressable>
   );
 }

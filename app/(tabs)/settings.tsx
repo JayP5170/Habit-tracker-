@@ -118,7 +118,7 @@ export default function Settings() {
           <View
             style={{
               backgroundColor: "white",
-              borderRadius: 16,
+              borderRadius: 6,
               padding: 20,
               shadowColor: "#000",
               shadowOpacity: 0.08,
@@ -140,7 +140,7 @@ export default function Settings() {
               style={{
                 borderWidth: 1,
                 borderColor: "#e5e7eb",
-                borderRadius: 10,
+                borderRadius: 6,
                 padding: 12,
                 backgroundColor: "#f9fafb",
                 fontSize: 16,
@@ -153,7 +153,7 @@ export default function Settings() {
               style={{
                 backgroundColor: "#6366F1",
                 paddingVertical: 14,
-                borderRadius: 10,
+                borderRadius: 6,
                 alignItems: "center",
                 opacity: loading ? 0.8 : 1,
               }}
@@ -197,7 +197,7 @@ export default function Settings() {
               style={{
                 borderWidth: 1,
                 borderColor: "#e5e7eb",
-                borderRadius: 10,
+                borderRadius: 6,
                 padding: 12,
                 backgroundColor: "#f9fafb",
                 fontSize: 16,
@@ -212,7 +212,7 @@ export default function Settings() {
               style={{
                 borderWidth: 1,
                 borderColor: "#e5e7eb",
-                borderRadius: 10,
+                borderRadius: 6,
                 padding: 12,
                 backgroundColor: "#f9fafb",
                 fontSize: 16,
@@ -224,7 +224,7 @@ export default function Settings() {
               style={{
                 backgroundColor: "#8B5CF6",
                 paddingVertical: 14,
-                borderRadius: 10,
+                borderRadius: 6,
                 alignItems: "center",
               }}
             >
@@ -238,6 +238,29 @@ export default function Settings() {
                 Change Password
               </Text>
             </Pressable>
+          </View>
+          <View >
+            <Pressable
+              onPress={async () => {
+                await supabase.auth.signOut();
+              }}
+              style={{
+                backgroundColor: "#EF4444",
+                paddingVertical: 14,
+                borderRadius: 6,
+                alignItems: "center",
+              }}
+            >
+              <Text
+                style={{
+                  color: "white",
+                  fontWeight: "600",
+                  fontSize: 16,
+                }}
+              >
+                Sign Out
+              </Text>
+            </Pressable>  
           </View>
         </ScrollView>
       </View>

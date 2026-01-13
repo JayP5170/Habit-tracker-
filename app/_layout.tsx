@@ -11,7 +11,7 @@ export const AuthContext = React.createContext({ session: null });
 export const useAuth = () => React.useContext(AuthContext);
 
 export default function RootLayout() {
-  const [session, setSession] = useState(null);
+  const [session, setSession] = useState(null) as any;
   const [appReady, setAppReady] = useState(false);
 
   const segments = useSegments();
